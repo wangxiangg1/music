@@ -438,6 +438,155 @@
     <script>
         lucide.createIcons();
 
+        // ========== IndexedDB 音频缓存系统 ==========
+        const CACHE_DB_NAME = 'MusicPlayerCache';
+        const CACHE_STORE_NAME = 'audioFiles';
+        const CACHE_MAX_SIZE = 250 * 1024 * 1024; // 250MB
+        let cacheDB = null;
+
+        // 初始化 IndexedDB
+        async function initCacheDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(CACHE_DB_NAME, 1);
+
+                request.onerror = () => {
+                    console.error('无法打开缓存数据库');
+                    resolve(null);
+                };
+
+                request.onsuccess = (event) => {
+                    cacheDB = event.target.result;
+                    console.log('缓存数据库已就绪');
+                    resolve(cacheDB);
+                };
+
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(CACHE_STORE_NAME)) {
+                        const store = db.createObjectStore(CACHE_STORE_NAME, { keyPath: 'key' });
+                        store.createIndex('timestamp', 'timestamp', { unique: false });
+                    }
+                };
+            });
+        }
+
+        // 获取缓存的音频
+        async function getCachedAudio(key) {
+            if (!cacheDB) return null;
+
+            return new Promise((resolve) => {
+                try {
+                    const transaction = cacheDB.transaction([CACHE_STORE_NAME], 'readonly');
+                    const store = transaction.objectStore(CACHE_STORE_NAME);
+                    const request = store.get(key);
+
+                    request.onsuccess = () => {
+                        if (request.result) {
+                            console.log(`从缓存加载: ${key}`);
+                            resolve(request.result.blob);
+                        } else {
+                            resolve(null);
+                        }
+                    };
+
+                    request.onerror = () => resolve(null);
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        }
+
+        // 保存音频到缓存
+        async function cacheAudio(key, blob) {
+            if (!cacheDB) return;
+
+            try {
+                // 先检查总缓存大小
+                await enforceСacheLimit(blob.size);
+
+                const transaction = cacheDB.transaction([CACHE_STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(CACHE_STORE_NAME);
+
+                store.put({
+                    key: key,
+                    blob: blob,
+                    size: blob.size,
+                    timestamp: Date.now()
+                });
+
+                console.log(`已缓存: ${key} (${(blob.size / 1024 / 1024).toFixed(2)}MB)`);
+            } catch (e) {
+                console.error('缓存保存失败:', e);
+            }
+        }
+
+        // 强制执行缓存大小限制
+        async function enforceСacheLimit(newFileSize) {
+            if (!cacheDB) return;
+
+            return new Promise((resolve) => {
+                const transaction = cacheDB.transaction([CACHE_STORE_NAME], 'readwrite');
+                const store = transaction.objectStore(CACHE_STORE_NAME);
+                const index = store.index('timestamp');
+
+                let totalSize = 0;
+                const itemsToDelete = [];
+
+                // 遍历所有缓存项，按时间排序
+                const request = index.openCursor();
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        totalSize += cursor.value.size || 0;
+                        itemsToDelete.push({ key: cursor.value.key, size: cursor.value.size });
+                        cursor.continue();
+                    } else {
+                        // 计算需要删除多少
+                        let sizeToFree = (totalSize + newFileSize) - CACHE_MAX_SIZE;
+
+                        if (sizeToFree > 0) {
+                            console.log(`缓存超限，需要释放 ${(sizeToFree / 1024 / 1024).toFixed(2)}MB`);
+
+                            // 删除最旧的文件直到腾出足够空间
+                            for (const item of itemsToDelete) {
+                                if (sizeToFree <= 0) break;
+                                store.delete(item.key);
+                                sizeToFree -= item.size;
+                                console.log(`删除缓存: ${item.key}`);
+                            }
+                        }
+
+                        resolve();
+                    }
+                };
+
+                request.onerror = () => resolve();
+            });
+        }
+
+        // 获取缓存统计
+        async function getCacheStats() {
+            if (!cacheDB) return { count: 0, size: 0 };
+
+            return new Promise((resolve) => {
+                const transaction = cacheDB.transaction([CACHE_STORE_NAME], 'readonly');
+                const store = transaction.objectStore(CACHE_STORE_NAME);
+                const request = store.getAll();
+
+                request.onsuccess = () => {
+                    const items = request.result || [];
+                    const totalSize = items.reduce((sum, item) => sum + (item.size || 0), 0);
+                    console.log(`缓存统计: ${items.length} 个文件, ${(totalSize / 1024 / 1024).toFixed(2)}MB / 250MB`);
+                    resolve({ count: items.length, size: totalSize });
+                };
+
+                request.onerror = () => resolve({ count: 0, size: 0 });
+            });
+        }
+
+        // 初始化缓存
+        initCacheDB().then(() => getCacheStats());
+
         const state = {
             playlist: [],
             currentIndex: -1,
@@ -546,8 +695,22 @@
             if (track.source === 'webdav' && !track.url) {
                 elements.loadingStatus.classList.remove('hidden');
                 try {
-                    const res = await fetch(track.fetchUrl, { headers: { 'Authorization': track.auth } });
-                    const blob = await res.blob();
+                    // 生成缓存键（使用URL作为唯一标识）
+                    const cacheKey = track.fetchUrl;
+
+                    // 先尝试从缓存加载
+                    let blob = await getCachedAudio(cacheKey);
+
+                    if (!blob) {
+                        // 缓存未命中，从网络下载
+                        console.log(`从网络下载: ${track.name}`);
+                        const res = await fetch(track.fetchUrl, { headers: { 'Authorization': track.auth } });
+                        blob = await res.blob();
+
+                        // 存入缓存
+                        await cacheAudio(cacheKey, blob);
+                    }
+
                     track.url = URL.createObjectURL(blob);
                     const meta = await getMetadata(blob);
                     Object.assign(track, meta);
@@ -1559,6 +1722,5 @@
         initTheme();
     </script>
 </body>
-
 
 </html>
