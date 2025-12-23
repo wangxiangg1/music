@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>温暖简约音乐播放器 - 交互增强版</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap');
+
+        :root {
+            --bg-color: #f7f3f0;
+            --panel-color: #ffffff;
+            --accent-color: #d4a373;
+            --text-main: #3d342f;
+            --text-muted: #8c8279;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            min-height: 100vh;
+        }
+
+        .soft-shadow {
+            box-shadow: 0 10px 40px -10px rgba(130, 110, 90, 0.2);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 3px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #e5e0db;
+            border-radius: 10px;
+        }
+
+        input[type="range"] {
+            appearance: none;
+            -webkit-appearance: none;
+            background: #e5e0db;
+            border-radius: 10px;
+            height: 4px;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: var(--accent-color);
+            border: 2px solid #fff;
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        .track-active {
+            background-color: #fcfaf8;
+            border-left: 3px solid var(--accent-color);
+        }
+
+        .loading-spinner {
+            border: 2px solid #e5e0db;
+            border-top: 2px solid var(--accent-color);
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(61, 52, 47, 0.4);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .explorer-item:hover {
+            background-color: #f8f5f2;
+        }
+
+        /* 播放模式按钮动画 */
+        .mode-btn-active {
+            color: var(--accent-color);
+        }
+    </style>
+</head>
+
+<body class="flex items-center justify-center p-6">
+
+    <div class="max-w-6xl w-full grid grid-cols-1 lg:grid-cols-12 gap-10">
+        <!-- 左侧：播放控制 -->
+        <div class="lg:col-span-7 flex flex-col justify-center space-y-8">
+            <div class="space-y-2">
+                <div class="flex items-center gap-2 text-sm font-medium tracking-widest text-orange-700/60 uppercase">
+                    <span class="w-8 h-[1px] bg-orange-700/30"></span>
+                    Now Playing
+                </div>
+                <h1 id="currentTitle" class="text-3xl md:text-5xl font-bold leading-tight truncate">享受音乐</h1>
+                <p id="currentArtist" class="text-lg text-stone-400 italic font-light">选择你的音乐库</p>
+            </div>
+
+            <!-- 封面展示 -->
+            <div class="relative">
+                <div
+                    class="w-full aspect-square md:aspect-video bg-[#ebe5df] rounded-[2.5rem] overflow-hidden soft-shadow flex items-center justify-center relative">
+                    <div id="defaultCover" class="absolute inset-0 flex items-center justify-center">
+                        <div
+                            class="w-32 h-32 border-2 border-stone-200 rounded-full flex items-center justify-center animate-[spin_15s_linear_infinite]">
+                            <div
+                                class="w-24 h-24 border-2 border-stone-300 rounded-full flex items-center justify-center">
+                                <div class="w-4 h-4 bg-stone-300 rounded-full"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <img id="coverImg"
+                        class="absolute inset-0 w-full h-full object-cover opacity-0 transition-opacity duration-700"
+                        alt="Album Cover">
+                    <canvas id="visualizer" class="absolute bottom-0 left-0 w-full h-1/2 pointer-events-none"></canvas>
+                </div>
+            </div>
+
+            <!-- 控制面板 -->
+            <div class="space-y-6 bg-white p-8 rounded-[2.5rem] soft-shadow">
+                <div class="space-y-2">
+                    <input type="range" id="progressBar" class="w-full cursor-pointer" value="0" step="0.1">
+                    <div class="flex justify-between text-[10px] font-bold text-stone-400 tracking-tighter">
+                        <span id="currentTime">00:00</span>
+                        <span id="durationTime">00:00</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-6">
+                        <!-- 播放模式切换 -->
+                        <button id="modeBtn" class="p-2 text-stone-300 hover:text-stone-800 transition" title="切换播放模式">
+                            <i data-lucide="repeat" id="modeIcon" class="w-5 h-5"></i>
+                        </button>
+
+                        <div class="flex items-center gap-4">
+                            <button id="prevBtn" class="hover:scale-110 transition text-stone-300 hover:text-stone-800">
+                                <i data-lucide="skip-back" class="w-8 h-8"></i>
+                            </button>
+                            <button id="playBtn"
+                                class="w-16 h-16 bg-stone-800 text-white rounded-full flex items-center justify-center hover:scale-105 transition shadow-xl">
+                                <i data-lucide="play" id="playIcon" class="w-6 h-6 fill-current"></i>
+                            </button>
+                            <button id="nextBtn" class="hover:scale-110 transition text-stone-300 hover:text-stone-800">
+                                <i data-lucide="skip-forward" class="w-8 h-8"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 w-32">
+                        <i data-lucide="volume-1" class="w-4 h-4 text-stone-300"></i>
+                        <input type="range" id="volumeBar" class="w-full" value="80" min="0" max="100">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：播放列表管理 -->
+        <div class="lg:col-span-5 flex flex-col space-y-6">
+            <div class="bg-white p-8 rounded-[2.5rem] soft-shadow flex flex-col h-[650px]">
+                <div class="flex flex-col gap-4 mb-8">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-xl font-bold tracking-tight">播放列表</h3>
+                        <div id="loadingStatus" class="hidden">
+                            <div class="loading-spinner"></div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <label
+                            class="flex-1 cursor-pointer text-center text-[10px] font-bold bg-stone-50 hover:bg-stone-100 border border-stone-100 px-3 py-3 rounded-2xl transition text-stone-600 uppercase tracking-widest">
+                            本地文件
+                            <input type="file" id="fileInput" class="hidden" multiple accept="audio/*">
+                        </label>
+                        <button id="webdavBtn"
+                            class="flex-1 flex items-center justify-center gap-2 text-[10px] font-bold bg-amber-50 hover:bg-amber-100 border border-amber-100 px-3 py-3 rounded-2xl transition text-amber-700 uppercase tracking-widest">
+                            <i data-lucide="server" class="w-3 h-3"></i> WebDAV 库
+                        </button>
+                    </div>
+                </div>
+
+                <div id="playlist" class="flex-1 overflow-y-auto custom-scrollbar space-y-1 pr-2">
+                    <div class="flex flex-col items-center justify-center h-full text-stone-200">
+                        <i data-lucide="library" class="w-12 h-12 mb-4 opacity-10"></i>
+                        <p class="text-xs italic">尚未添加任何音乐</p>
+                    </div>
+                </div>
+
+                <div class="mt-6 pt-6 border-t border-stone-50 flex justify-between items-center">
+                    <span id="trackCount" class="text-[10px] font-black text-stone-300 uppercase tracking-[0.2em]">0
+                        Items</span>
+                    <button id="clearBtn"
+                        class="text-[10px] font-black text-red-200 hover:text-red-400 transition uppercase">Clear
+                        All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- WebDAV 模态框 (保持不变) -->
+    <div id="webdavModal" class="modal">
+        <div class="bg-white p-8 rounded-[2.5rem] w-full max-w-md soft-shadow mx-4">
+            <h4 class="text-xl font-bold mb-6 flex items-center gap-2">
+                <i data-lucide="cloud-lightning" class="w-5 h-5 text-amber-600"></i>
+                WebDAV 连接
+            </h4>
+            <div class="space-y-4">
+                <div>
+                    <label
+                        class="block text-[10px] font-bold text-stone-400 mb-1 uppercase tracking-widest">服务器地址</label>
+                    <input type="text" id="davUrl" placeholder="https://example.com/dav"
+                        class="w-full bg-stone-50 border-stone-100 border rounded-xl p-4 text-sm focus:ring-2 focus:ring-amber-200 outline-none transition-all">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-stone-400 mb-1 uppercase tracking-widest">用户名</label>
+                        <input type="text" id="davUser"
+                            class="w-full bg-stone-50 border-stone-100 border rounded-xl p-4 text-sm outline-none">
+                    </div>
+                    <div>
+                        <label
+                            class="block text-[10px] font-bold text-stone-400 mb-1 uppercase tracking-widest">密码</label>
+                        <input type="password" id="davPass"
+                            class="w-full bg-stone-50 border-stone-100 border rounded-xl p-4 text-sm outline-none">
+                    </div>
+                </div>
+                <!-- 记住账户复选框 -->
+                <div class="flex items-center gap-3 pt-2">
+                    <input type="checkbox" id="rememberDav"
+                        class="w-4 h-4 rounded border-stone-300 text-amber-600 focus:ring-amber-500">
+                    <label for="rememberDav" class="text-xs text-stone-500">记住账户（保存到浏览器本地）</label>
+                </div>
+                <p class="text-[10px] text-stone-300 italic">提示：凭据仅存储在您的浏览器中，不会上传到服务器</p>
+                <div class="flex gap-3 pt-4">
+                    <button id="closeModal"
+                        class="flex-1 p-4 rounded-2xl bg-stone-100 text-stone-500 font-bold text-sm hover:bg-stone-200 transition">取消</button>
+                    <button id="connectDav"
+                        class="flex-1 p-4 rounded-2xl bg-stone-800 text-white font-bold text-sm shadow-lg hover:bg-stone-700 transition">浏览文件</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- WebDAV 文件管理/选择模态框 -->
+    <div id="explorerModal" class="modal">
+        <div class="bg-white p-8 rounded-[2.5rem] w-full max-w-2xl soft-shadow mx-4 flex flex-col h-[80vh]">
+            <div class="flex items-center justify-between mb-6">
+                <h4 class="text-xl font-bold flex items-center gap-2">
+                    <i data-lucide="folder-open" class="w-5 h-5 text-amber-600"></i>
+                    资源管理器
+                </h4>
+                <button id="closeExplorer" class="text-stone-400 hover:text-stone-800 transition">
+                    <i data-lucide="x" class="w-6 h-6"></i>
+                </button>
+            </div>
+
+            <div id="explorerPath"
+                class="bg-stone-50 p-3 rounded-xl mb-4 text-[10px] font-mono text-stone-400 truncate">/</div>
+            <div id="explorerList" class="flex-1 overflow-y-auto custom-scrollbar border border-stone-50 rounded-2xl">
+            </div>
+
+            <div class="mt-6 pt-6 border-t border-stone-50 flex justify-end items-center gap-4">
+                <p class="text-[10px] text-stone-400 font-bold uppercase mr-auto"><span id="selectedCount">0</span> 项待导入
+                </p>
+                <button id="importCurrentDir"
+                    class="px-6 py-3 rounded-xl bg-stone-100 text-stone-600 font-bold text-sm hover:bg-stone-200 transition">导入本目录</button>
+                <button id="importSelected"
+                    class="px-8 py-3 rounded-xl bg-amber-600 text-white font-bold text-sm shadow-lg shadow-amber-100 hover:bg-amber-700 transition">导入已选</button>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audioElement"></audio>
+
+    <script>
+        lucide.createIcons();
+
+        const state = {
+            playlist: [],
+            currentIndex: -1,
+            isPlaying: false,
+            // 播放模式: 'list' (列表循环), 'random' (随机), 'single' (单曲循环)
+            playMode: 'list',
+            audioContext: null,
+            analyser: null,
+            source: null,
+            animationId: null,
+            davConfig: { url: '', auth: '' },
+            currentBrowsingUrl: '',
+            explorerItems: [],
+            selectedItems: [],
+            // 可视化颜色（从封面提取）
+            visualizerColors: {
+                primary: { r: 212, g: 163, b: 115 },    // 默认琥琥色
+                secondary: { r: 180, g: 120, b: 80 },   // 默认深色
+                accent: { r: 235, g: 200, b: 160 }      // 默认高光色
+            }
+        };
+
+        const elements = {
+            fileInput: document.getElementById('fileInput'),
+            webdavBtn: document.getElementById('webdavBtn'),
+            webdavModal: document.getElementById('webdavModal'),
+            closeModal: document.getElementById('closeModal'),
+            connectDav: document.getElementById('connectDav'),
+            explorerModal: document.getElementById('explorerModal'),
+            closeExplorer: document.getElementById('closeExplorer'),
+            explorerList: document.getElementById('explorerList'),
+            explorerPath: document.getElementById('explorerPath'),
+            importSelected: document.getElementById('importSelected'),
+            importCurrentDir: document.getElementById('importCurrentDir'),
+            selectedCount: document.getElementById('selectedCount'),
+            playlist: document.getElementById('playlist'),
+            audio: document.getElementById('audioElement'),
+            playBtn: document.getElementById('playBtn'),
+            playIcon: document.getElementById('playIcon'),
+            prevBtn: document.getElementById('prevBtn'),
+            nextBtn: document.getElementById('nextBtn'),
+            modeBtn: document.getElementById('modeBtn'),
+            modeIcon: document.getElementById('modeIcon'),
+            currentTitle: document.getElementById('currentTitle'),
+            currentArtist: document.getElementById('currentArtist'),
+            progressBar: document.getElementById('progressBar'),
+            volumeBar: document.getElementById('volumeBar'),
+            currentTimeText: document.getElementById('currentTime'),
+            durationTimeText: document.getElementById('durationTime'),
+            trackCount: document.getElementById('trackCount'),
+            clearBtn: document.getElementById('clearBtn'),
+            visualizer: document.getElementById('visualizer'),
+            coverImg: document.getElementById('coverImg'),
+            defaultCover: document.getElementById('defaultCover'),
+            loadingStatus: document.getElementById('loadingStatus')
+        };
+
+        // --- 播放模式切换 ---
+        const modes = [
+            { id: 'list', icon: 'repeat', label: '列表循环' },
+            { id: 'random', icon: 'shuffle', label: '随机播放' },
+            { id: 'single', icon: 'repeat-1', label: '单曲循环' }
+        ];
+
+        elements.modeBtn.onclick = () => {
+            const currentIdx = modes.findIndex(m => m.id === state.playMode);
+            const nextIdx = (currentIdx + 1) % modes.length;
+            state.playMode = modes[nextIdx].id;
+
+            // 更新 UI - 先插入新的 i 标签，然后让 Lucide 转换，最后更新引用
+            const iconContainer = elements.modeBtn;
+            iconContainer.innerHTML = `<i data-lucide="${modes[nextIdx].icon}" id="modeIcon" class="w-5 h-5"></i>`;
+            lucide.createIcons({ nodes: [iconContainer] }); // 只对这个容器内的图标进行转换
+            elements.modeIcon = iconContainer.querySelector('svg') || iconContainer.querySelector('[data-lucide]');
+            elements.modeBtn.title = modes[nextIdx].label;
+            elements.modeBtn.classList.toggle('mode-btn-active', state.playMode !== 'list');
+        };
+
+        // --- 核心播放逻辑修复 ---
+        function updatePlayIcon() {
+            // 确保图标与状态同步 - 先插入新的 i 标签，然后让 Lucide 转换
+            const iconName = state.isPlaying ? 'pause' : 'play';
+            const iconContainer = elements.playBtn;
+            // 保留按钮内容，只替换图标部分
+            const currentIcon = iconContainer.querySelector('svg') || iconContainer.querySelector('[data-lucide]');
+            if (currentIcon) {
+                currentIcon.outerHTML = `<i data-lucide="${iconName}" id="playIcon" class="w-6 h-6 fill-current"></i>`;
+            }
+            lucide.createIcons({ nodes: [iconContainer] }); // 只对这个容器内的图标进行转换
+            elements.playIcon = iconContainer.querySelector('svg') || iconContainer.querySelector('[data-lucide]');
+        }
+
+        async function playTrack(index) {
+            if (index < 0 || index >= state.playlist.length) return;
+            state.currentIndex = index;
+            const track = state.playlist[index];
+
+            if (track.source === 'webdav' && !track.url) {
+                elements.loadingStatus.classList.remove('hidden');
+                try {
+                    const res = await fetch(track.fetchUrl, { headers: { 'Authorization': track.auth } });
+                    const blob = await res.blob();
+                    track.url = URL.createObjectURL(blob);
+                    const meta = await getMetadata(blob);
+                    Object.assign(track, meta);
+                } catch (e) {
+                    console.error("加载失败", e);
+                }
+                elements.loadingStatus.classList.add('hidden');
+            }
+
+            elements.audio.src = track.url;
+            elements.currentTitle.textContent = track.title || track.name.replace(/\.[^/.]+$/, "");
+            elements.currentArtist.textContent = track.artist || (track.source === 'webdav' ? "WebDAV Library" : "本地文件");
+
+            if (track.cover) {
+                elements.coverImg.src = track.cover;
+                elements.coverImg.classList.add('opacity-100');
+                elements.defaultCover.classList.add('opacity-0');
+                // 从封面提取颜色
+                extractColorsFromImage(track.cover);
+            } else {
+                elements.coverImg.classList.remove('opacity-100');
+                elements.defaultCover.classList.remove('opacity-0');
+                // 重置为默认颜色
+                state.visualizerColors = {
+                    primary: { r: 212, g: 163, b: 115 },
+                    secondary: { r: 180, g: 120, b: 80 },
+                    accent: { r: 235, g: 200, b: 160 }
+                };
+            }
+
+            renderPlaylist();
+
+            // 播放音频并更新状态
+            try {
+                await elements.audio.play();
+                state.isPlaying = true;
+            } catch (err) {
+                console.error("播放被拦截或失败:", err);
+                state.isPlaying = false;
+            }
+            updatePlayIcon();
+            setupVisualizer();
+        }
+
+        elements.playBtn.onclick = () => {
+            if (state.currentIndex === -1 && state.playlist.length > 0) {
+                playTrack(0);
+                return;
+            }
+            if (state.currentIndex === -1) return;
+
+            if (state.isPlaying) {
+                elements.audio.pause();
+                state.isPlaying = false;
+            } else {
+                elements.audio.play();
+                state.isPlaying = true;
+            }
+            updatePlayIcon();
+        };
+
+        // --- 智能切歌逻辑 ---
+        function nextTrack() {
+            if (state.playlist.length === 0) return;
+
+            if (state.playMode === 'random') {
+                const nextIndex = Math.floor(Math.random() * state.playlist.length);
+                playTrack(nextIndex);
+            } else if (state.playMode === 'single') {
+                playTrack(state.currentIndex);
+            } else {
+                // 列表循环
+                const nextIndex = (state.currentIndex + 1) % state.playlist.length;
+                playTrack(nextIndex);
+            }
+        }
+
+        elements.nextBtn.onclick = nextTrack;
+        elements.audio.onended = nextTrack;
+
+        elements.prevBtn.onclick = () => {
+            if (state.playlist.length === 0) return;
+            let nextIndex = state.currentIndex - 1;
+            if (nextIndex < 0) nextIndex = state.playlist.length - 1;
+            playTrack(nextIndex);
+        };
+
+        // --- WebDAV & 其他逻辑 (保持不变但确保集成) ---
+
+        // 打开 WebDAV 配置模态框
+        elements.webdavBtn.onclick = () => {
+            // 加载已保存的凭据
+            const savedConfig = localStorage.getItem('webdav_config');
+            if (savedConfig) {
+                try {
+                    const config = JSON.parse(savedConfig);
+                    document.getElementById('davUrl').value = config.url || '';
+                    document.getElementById('davUser').value = config.user || '';
+                    document.getElementById('davPass').value = config.pass || '';
+                    document.getElementById('rememberDav').checked = true;
+                } catch (e) {
+                    console.error('加载配置失败:', e);
+                }
+            }
+            elements.webdavModal.classList.add('active');
+        };
+
+        // 关闭 WebDAV 模态框
+        elements.closeModal.onclick = () => {
+            elements.webdavModal.classList.remove('active');
+        };
+
+        // 关闭资源管理器模态框
+        elements.closeExplorer.onclick = () => {
+            elements.explorerModal.classList.remove('active');
+        };
+
+        elements.connectDav.onclick = async () => {
+            let url = document.getElementById('davUrl').value.trim();
+            const user = document.getElementById('davUser').value.trim();
+            const pass = document.getElementById('davPass').value.trim();
+            const remember = document.getElementById('rememberDav').checked;
+
+            if (!url) return;
+            if (!url.startsWith('http')) url = 'https://' + url;
+            if (!url.endsWith('/')) url += '/';
+
+            // 保存或清除凭据
+            if (remember) {
+                localStorage.setItem('webdav_config', JSON.stringify({ url, user, pass }));
+            } else {
+                localStorage.removeItem('webdav_config');
+            }
+
+            state.davConfig.url = url;
+            state.davConfig.auth = 'Basic ' + btoa(user + ':' + pass);
+            elements.webdavModal.classList.remove('active');
+            browseFolder(url);
+        };
+
+        async function browseFolder(fullUrl) {
+            elements.loadingStatus.classList.remove('hidden');
+            try {
+                const targetUrl = fullUrl.endsWith('/') ? fullUrl : fullUrl + '/';
+                const response = await fetch(targetUrl, {
+                    method: 'PROPFIND',
+                    headers: { 'Authorization': state.davConfig.auth, 'Depth': '1' }
+                });
+                if (!response.ok) throw new Error('连接失败');
+                const text = await response.text();
+                const parser = new DOMParser();
+                const xml = parser.parseFromString(text, 'text/xml');
+                const responses = Array.from(xml.getElementsByTagNameNS('*', 'response'));
+                state.currentBrowsingUrl = targetUrl;
+                const urlObj = new URL(targetUrl);
+                elements.explorerPath.textContent = urlObj.pathname;
+                const items = [];
+                responses.forEach((res) => {
+                    const hrefRaw = res.getElementsByTagNameNS('*', 'href')[0].textContent;
+                    const absoluteHref = hrefRaw.startsWith('http') ? hrefRaw : new URL(hrefRaw, urlObj.origin).href;
+                    if (absoluteHref === targetUrl || absoluteHref === targetUrl.slice(0, -1)) return;
+                    const prop = res.getElementsByTagNameNS('*', 'prop')[0];
+                    const resourcetype = prop.getElementsByTagNameNS('*', 'resourcetype')[0];
+                    const isCollection = resourcetype && resourcetype.getElementsByTagNameNS('*', 'collection').length > 0;
+                    const fileName = decodeURIComponent(absoluteHref.split('/').filter(p => p).pop() || '/');
+                    items.push({ name: fileName, href: absoluteHref, isFolder: isCollection, selected: false });
+                });
+                state.explorerItems = items;
+                state.selectedItems = [];
+                renderExplorer();
+                elements.explorerModal.classList.add('active');
+            } catch (e) { alert("无法浏览文件夹内容。"); } finally { elements.loadingStatus.classList.add('hidden'); }
+        }
+
+        function renderExplorer() {
+            elements.explorerList.innerHTML = '';
+            if (state.currentBrowsingUrl !== state.davConfig.url) {
+                const upBtn = document.createElement('div');
+                upBtn.className = 'explorer-item p-4 flex items-center gap-4 cursor-pointer text-stone-400 border-b border-stone-50';
+                upBtn.innerHTML = `<i data-lucide="corner-left-up" class="w-4 h-4"></i> <span class="text-xs font-bold uppercase tracking-widest">返回上级目录</span>`;
+                upBtn.onclick = () => browseFolder(new URL('../', state.currentBrowsingUrl).href);
+                elements.explorerList.appendChild(upBtn);
+            }
+            state.explorerItems.forEach((item) => {
+                const div = document.createElement('div');
+                div.className = `explorer-item p-4 flex items-center gap-4 cursor-pointer border-b border-stone-50 transition-colors ${item.selected ? 'bg-amber-50' : ''}`;
+                div.innerHTML = `
+                    <div class="flex-shrink-0"><i data-lucide="${item.selected ? 'check-square' : (item.isFolder ? 'folder' : 'music')}" class="w-5 h-5 ${item.selected ? 'text-amber-600' : (item.isFolder ? 'text-amber-500' : 'text-stone-400')}"></i></div>
+                    <div class="flex-1 min-w-0"><p class="text-sm font-medium truncate ${item.isFolder ? 'font-bold' : ''}">${item.name}</p></div>
+                `;
+                div.onclick = () => {
+                    if (item.isFolder) browseFolder(item.href);
+                    else { item.selected = !item.selected; renderExplorer(); updateSelectedCount(); }
+                };
+                elements.explorerList.appendChild(div);
+            });
+            lucide.createIcons();
+            updateSelectedCount();
+        }
+
+        function updateSelectedCount() {
+            state.selectedItems = state.explorerItems.filter(i => i.selected);
+            elements.selectedCount.textContent = state.selectedItems.length;
+        }
+
+        elements.importSelected.onclick = () => {
+            const tracks = state.selectedItems.map(item => ({ name: item.name, fetchUrl: item.href, auth: state.davConfig.auth, source: 'webdav' }));
+            if (tracks.length === 0) return;
+            state.playlist = [...state.playlist, ...tracks];
+            renderPlaylist();
+            elements.explorerModal.classList.remove('active');
+        };
+
+        elements.importCurrentDir.onclick = () => {
+            const audioTracks = state.explorerItems.filter(item => !item.isFolder).map(item => ({ name: item.name, fetchUrl: item.href, auth: state.davConfig.auth, source: 'webdav' }));
+            if (audioTracks.length === 0) return;
+            state.playlist = [...state.playlist, ...audioTracks];
+            renderPlaylist();
+            elements.explorerModal.classList.remove('active');
+        };
+
+        async function getMetadata(file) {
+            return new Promise((resolve) => {
+                jsmediatags.read(file, {
+                    onSuccess: (tag) => {
+                        const { title, artist, picture } = tag.tags;
+                        let cover = null;
+                        if (picture) {
+                            const { data, format } = picture;
+                            let base = "";
+                            for (let i = 0; i < data.length; i++) base += String.fromCharCode(data[i]);
+                            cover = `data:${format};base64,${window.btoa(base)}`;
+                        }
+                        resolve({ title, artist, cover });
+                    },
+                    onError: () => resolve({ title: null, artist: null, cover: null })
+                });
+            });
+        }
+
+        function renderPlaylist() {
+            if (state.playlist.length === 0) {
+                elements.playlist.innerHTML = `<div class="flex flex-col items-center justify-center h-full text-stone-200"><i data-lucide="music-2" class="w-12 h-12 mb-2 opacity-10"></i><p class="text-[10px] font-bold uppercase tracking-widest">Empty</p></div>`;
+                lucide.createIcons();
+                return;
+            }
+            elements.playlist.innerHTML = '';
+            elements.trackCount.textContent = `${state.playlist.length} Tracks`;
+            state.playlist.forEach((track, index) => {
+                const item = document.createElement('div');
+                item.className = `group p-4 rounded-3xl cursor-pointer transition flex items-center gap-4 hover:bg-stone-50 ${index === state.currentIndex ? 'track-active' : ''}`;
+                item.innerHTML = `
+                    <div class="w-10 h-10 rounded-xl overflow-hidden bg-stone-100 flex-shrink-0 relative">
+                        ${track.cover ? `<img src="${track.cover}" class="w-full h-full object-cover">` : `<div class="w-full h-full flex items-center justify-center text-stone-300"><i data-lucide="music" class="w-4 h-4"></i></div>`}
+                        ${track.source === 'webdav' ? `<div class="absolute bottom-0 right-0 bg-amber-600 p-0.5 rounded-tl-md"><i data-lucide="server" class="w-2 h-2 text-white"></i></div>` : ''}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-bold truncate ${index === state.currentIndex ? 'text-stone-800' : 'text-stone-500'}">${track.title || track.name}</p>
+                        <p class="text-[9px] text-stone-400 font-bold uppercase tracking-wider">${track.artist || 'Local Collection'}</p>
+                    </div>
+                `;
+                item.onclick = () => playTrack(index);
+                elements.playlist.appendChild(item);
+            });
+            lucide.createIcons();
+        }
+
+        // 从图片提取主色调
+        function extractColorsFromImage(imageSrc) {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                try {
+                    // 创建临时canvas来分析图片
+                    const tempCanvas = document.createElement('canvas');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    const sampleSize = 50; // 缩小图片提高性能
+                    tempCanvas.width = sampleSize;
+                    tempCanvas.height = sampleSize;
+                    tempCtx.drawImage(img, 0, 0, sampleSize, sampleSize);
+
+                    const imageData = tempCtx.getImageData(0, 0, sampleSize, sampleSize).data;
+
+                    // 收集颜色样本（只取图片下半部分，因为波形在下面）
+                    const colorSamples = [];
+                    const startY = Math.floor(sampleSize / 2);
+
+                    for (let y = startY; y < sampleSize; y++) {
+                        for (let x = 0; x < sampleSize; x++) {
+                            const idx = (y * sampleSize + x) * 4;
+                            const r = imageData[idx];
+                            const g = imageData[idx + 1];
+                            const b = imageData[idx + 2];
+                            const a = imageData[idx + 3];
+
+                            // 跳过透明和过亮/过暗的像素
+                            if (a < 128) continue;
+                            const brightness = (r + g + b) / 3;
+                            if (brightness < 30 || brightness > 225) continue;
+
+                            colorSamples.push({ r, g, b });
+                        }
+                    }
+
+                    if (colorSamples.length === 0) return;
+
+                    // 简单的颜色聚类 - 按色相分组
+                    const colorGroups = {};
+                    colorSamples.forEach(color => {
+                        // 转HSL来获取色相
+                        const max = Math.max(color.r, color.g, color.b);
+                        const min = Math.min(color.r, color.g, color.b);
+                        const l = (max + min) / 2 / 255;
+                        let h = 0;
+                        if (max !== min) {
+                            const d = max - min;
+                            if (max === color.r) h = ((color.g - color.b) / d + (color.g < color.b ? 6 : 0)) / 6;
+                            else if (max === color.g) h = ((color.b - color.r) / d + 2) / 6;
+                            else h = ((color.r - color.g) / d + 4) / 6;
+                        }
+
+                        // 按色相分组（12个分组）
+                        const hueGroup = Math.floor(h * 12);
+                        const key = `${hueGroup}-${Math.floor(l * 3)}`;
+
+                        if (!colorGroups[key]) colorGroups[key] = { colors: [], count: 0 };
+                        colorGroups[key].colors.push(color);
+                        colorGroups[key].count++;
+                    });
+
+                    // 找到最常见的颜色组
+                    let dominantGroup = null;
+                    let maxCount = 0;
+                    Object.values(colorGroups).forEach(group => {
+                        if (group.count > maxCount) {
+                            maxCount = group.count;
+                            dominantGroup = group;
+                        }
+                    });
+
+                    if (!dominantGroup) return;
+
+                    // 计算主色组的平均色
+                    const avgColor = { r: 0, g: 0, b: 0 };
+                    dominantGroup.colors.forEach(c => {
+                        avgColor.r += c.r;
+                        avgColor.g += c.g;
+                        avgColor.b += c.b;
+                    });
+                    avgColor.r = Math.round(avgColor.r / dominantGroup.colors.length);
+                    avgColor.g = Math.round(avgColor.g / dominantGroup.colors.length);
+                    avgColor.b = Math.round(avgColor.b / dominantGroup.colors.length);
+
+                    // 生成配套颜色
+                    state.visualizerColors = {
+                        primary: avgColor,
+                        secondary: {
+                            r: Math.max(0, avgColor.r - 40),
+                            g: Math.max(0, avgColor.g - 40),
+                            b: Math.max(0, avgColor.b - 40)
+                        },
+                        accent: {
+                            r: Math.min(255, avgColor.r + 30),
+                            g: Math.min(255, avgColor.g + 30),
+                            b: Math.min(255, avgColor.b + 30)
+                        }
+                    };
+
+                    console.log('提取的主色调:', state.visualizerColors);
+                } catch (e) {
+                    console.error('颜色提取失败:', e);
+                }
+            };
+            img.src = imageSrc;
+        }
+
+        function setupVisualizer() {
+            if (!state.audioContext) {
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                state.analyser = state.audioContext.createAnalyser();
+                state.source = state.audioContext.createMediaElementSource(elements.audio);
+                state.source.connect(state.analyser);
+                state.analyser.connect(state.audioContext.destination);
+                state.analyser.fftSize = 256; // 更高精度
+            }
+            if (state.animationId) cancelAnimationFrame(state.animationId);
+
+            const canvas = elements.visualizer;
+            const ctx = canvas.getContext('2d');
+            const bufferLength = state.analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+
+            // 平滑过渡数据
+            const smoothedData = new Float32Array(bufferLength);
+            const smoothingFactor = 0.7;
+
+            function draw() {
+                state.animationId = requestAnimationFrame(draw);
+                state.analyser.getByteFrequencyData(dataArray);
+
+                // 确保canvas尺寸正确
+                if (canvas.width !== canvas.offsetWidth || canvas.height !== canvas.offsetHeight) {
+                    canvas.width = canvas.offsetWidth;
+                    canvas.height = canvas.offsetHeight;
+                }
+
+                const width = canvas.width;
+                const height = canvas.height;
+
+                // 获取当前颜色
+                const colors = state.visualizerColors;
+                const { primary, secondary, accent } = colors;
+
+                // 清除画布
+                ctx.clearRect(0, 0, width, height);
+
+                // 只取前64个频段（低频和中频更有视觉效果）
+                const barsCount = 64;
+                const barWidth = width / barsCount;
+                const gap = 2;
+
+                for (let i = 0; i < barsCount; i++) {
+                    // 平滑过渡
+                    smoothedData[i] = smoothedData[i] * smoothingFactor + dataArray[i] * (1 - smoothingFactor);
+
+                    const barHeight = (smoothedData[i] / 255) * height * 0.85;
+                    const x = i * barWidth;
+                    const y = height - barHeight;
+
+                    // 创建渐变色 - 使用从封面提取的颜色
+                    const gradient = ctx.createLinearGradient(x, height, x, y);
+                    const intensity = smoothedData[i] / 255;
+
+                    // 根据音频强度动态调整颜色透明度
+                    gradient.addColorStop(0, `rgba(${primary.r}, ${primary.g}, ${primary.b}, ${0.1 + intensity * 0.3})`); // 底部淡
+                    gradient.addColorStop(0.5, `rgba(${primary.r}, ${primary.g}, ${primary.b}, ${0.3 + intensity * 0.4})`); // 中间
+                    gradient.addColorStop(1, `rgba(${secondary.r}, ${secondary.g}, ${secondary.b}, ${0.5 + intensity * 0.5})`); // 顶部浓
+
+                    // 绘制圆角柱子
+                    const radius = Math.min(barWidth - gap, barHeight) / 2;
+                    ctx.beginPath();
+                    if (barHeight > radius * 2) {
+                        ctx.moveTo(x + gap / 2 + radius, y);
+                        ctx.lineTo(x + barWidth - gap / 2 - radius, y);
+                        ctx.quadraticCurveTo(x + barWidth - gap / 2, y, x + barWidth - gap / 2, y + radius);
+                        ctx.lineTo(x + barWidth - gap / 2, height);
+                        ctx.lineTo(x + gap / 2, height);
+                        ctx.lineTo(x + gap / 2, y + radius);
+                        ctx.quadraticCurveTo(x + gap / 2, y, x + gap / 2 + radius, y);
+                    } else {
+                        ctx.roundRect(x + gap / 2, y, barWidth - gap, barHeight, radius);
+                    }
+                    ctx.closePath();
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+
+                    // 添加微弱的发光效果 - 使用主颜色
+                    if (intensity > 0.5) {
+                        ctx.shadowColor = `rgba(${accent.r}, ${accent.g}, ${accent.b}, 0.6)`;
+                        ctx.shadowBlur = 12 * intensity;
+                    }
+                }
+
+                // 重置阴影
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+
+                // 添加底部渐变遮罩（让波形底部融入背景）
+                const fadeGradient = ctx.createLinearGradient(0, height * 0.7, 0, height);
+                fadeGradient.addColorStop(0, 'rgba(235, 229, 223, 0)');
+                fadeGradient.addColorStop(1, 'rgba(235, 229, 223, 0.8)');
+                ctx.fillStyle = fadeGradient;
+                ctx.fillRect(0, height * 0.7, width, height * 0.3);
+            }
+            draw();
+        }
+
+        elements.fileInput.onchange = async (e) => {
+            elements.loadingStatus.classList.remove('hidden');
+            for (let file of e.target.files) {
+                const meta = await getMetadata(file);
+                state.playlist.push({ name: file.name, url: URL.createObjectURL(file), source: 'local', ...meta });
+            }
+            renderPlaylist();
+            elements.loadingStatus.classList.add('hidden');
+        };
+
+        elements.audio.ontimeupdate = () => {
+            elements.progressBar.value = (elements.audio.currentTime / elements.audio.duration) * 100 || 0;
+            const m = Math.floor(elements.audio.currentTime / 60), s = Math.floor(elements.audio.currentTime % 60);
+            elements.currentTimeText.textContent = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        };
+        elements.audio.onloadedmetadata = () => {
+            const m = Math.floor(elements.audio.duration / 60), s = Math.floor(elements.audio.duration % 60);
+            elements.durationTimeText.textContent = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        };
+        elements.progressBar.oninput = (e) => elements.audio.currentTime = (e.target.value / 100) * elements.audio.duration;
+        elements.volumeBar.oninput = (e) => elements.audio.volume = e.target.value / 100;
+
+        elements.clearBtn.onclick = () => {
+            state.playlist = []; state.currentIndex = -1; state.isPlaying = false;
+            elements.audio.src = ''; elements.coverImg.classList.remove('opacity-100');
+            elements.defaultCover.classList.remove('opacity-0');
+            renderPlaylist(); updatePlayIcon();
+        };
+
+        window.onresize = () => {
+            if (elements.visualizer.parentElement) {
+                elements.visualizer.width = elements.visualizer.parentElement.clientWidth;
+                elements.visualizer.height = 128;
+            }
+        };
+        window.onresize();
+    </script>
+</body>
+
+</html>
