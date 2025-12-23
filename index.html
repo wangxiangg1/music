@@ -12,8 +12,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="Music">
-    <link rel="apple-touch-icon"
-        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23d4a373' rx='20' width='100' height='100'/><text x='50' y='65' font-size='50' text-anchor='middle' fill='white'>♪</text></svg>">
+    <link rel="apple-touch-icon" href="icon.png">
+    <link rel="icon" type="image/png" href="icon.png">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -452,6 +452,9 @@
             currentBrowsingUrl: '',
             explorerItems: [],
             selectedItems: [],
+            // 播放历史（用于随机模式下的"上一首"）
+            playHistory: [],
+            playHistoryIndex: -1,
             // 可视化颜色（从封面提取）
             visualizerColors: {
                 primary: { r: 212, g: 163, b: 115 },    // 默认琥琥色
@@ -530,10 +533,15 @@
             elements.playIcon = iconContainer.querySelector('svg') || iconContainer.querySelector('[data-lucide]');
         }
 
-        async function playTrack(index) {
+        async function playTrack(index, shouldAddToHistory = true) {
             if (index < 0 || index >= state.playlist.length) return;
             state.currentIndex = index;
             const track = state.playlist[index];
+
+            // 添加到播放历史
+            if (shouldAddToHistory) {
+                addToHistory(index);
+            }
 
             if (track.source === 'webdav' && !track.url) {
                 elements.loadingStatus.classList.remove('hidden');
@@ -648,31 +656,72 @@
             updatePlayIcon();
         };
 
-        // --- 智能切歌逻辑 ---
+        // --- 智能切歌逻辑（支持播放历史）---
+        function addToHistory(index) {
+            // 如果是从历史中回退后又前进，截断后面的历史
+            if (state.playHistoryIndex < state.playHistory.length - 1) {
+                state.playHistory = state.playHistory.slice(0, state.playHistoryIndex + 1);
+            }
+            state.playHistory.push(index);
+            state.playHistoryIndex = state.playHistory.length - 1;
+
+            // 限制历史记录长度
+            if (state.playHistory.length > 100) {
+                state.playHistory.shift();
+                state.playHistoryIndex--;
+            }
+        }
+
         function nextTrack() {
             if (state.playlist.length === 0) return;
 
+            let nextIndex;
+
+            // 检查是否可以从历史中前进
+            if (state.playHistoryIndex < state.playHistory.length - 1) {
+                state.playHistoryIndex++;
+                nextIndex = state.playHistory[state.playHistoryIndex];
+                playTrack(nextIndex, false); // false = 不添加到历史
+                return;
+            }
+
             if (state.playMode === 'random') {
-                const nextIndex = Math.floor(Math.random() * state.playlist.length);
-                playTrack(nextIndex);
+                // 随机选择，但避免选到当前歌曲
+                do {
+                    nextIndex = Math.floor(Math.random() * state.playlist.length);
+                } while (nextIndex === state.currentIndex && state.playlist.length > 1);
             } else if (state.playMode === 'single') {
-                playTrack(state.currentIndex);
+                nextIndex = state.currentIndex;
             } else {
                 // 列表循环
-                const nextIndex = (state.currentIndex + 1) % state.playlist.length;
-                playTrack(nextIndex);
+                nextIndex = (state.currentIndex + 1) % state.playlist.length;
             }
+
+            playTrack(nextIndex, true); // true = 添加到历史
+        }
+
+        function prevTrack() {
+            if (state.playlist.length === 0) return;
+
+            // 随机模式下：从播放历史中回退
+            if (state.playMode === 'random') {
+                if (state.playHistoryIndex > 0) {
+                    state.playHistoryIndex--;
+                    const prevIndex = state.playHistory[state.playHistoryIndex];
+                    playTrack(prevIndex, false); // false = 不添加到历史
+                }
+                return;
+            }
+
+            // 列表/单曲模式：正常上一首
+            let prevIndex = state.currentIndex - 1;
+            if (prevIndex < 0) prevIndex = state.playlist.length - 1;
+            playTrack(prevIndex, true);
         }
 
         elements.nextBtn.onclick = nextTrack;
         elements.audio.onended = nextTrack;
-
-        elements.prevBtn.onclick = () => {
-            if (state.playlist.length === 0) return;
-            let nextIndex = state.currentIndex - 1;
-            if (nextIndex < 0) nextIndex = state.playlist.length - 1;
-            playTrack(nextIndex);
-        };
+        elements.prevBtn.onclick = prevTrack;
 
         // --- WebDAV & 其他逻辑 (保持不变但确保集成) ---
 
@@ -1510,5 +1559,6 @@
         initTheme();
     </script>
 </body>
+
 
 </html>
