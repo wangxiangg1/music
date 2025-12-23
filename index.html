@@ -544,6 +544,17 @@
             browseFolder(url);
         };
 
+        // 支持的音频格式列表
+        const SUPPORTED_AUDIO_FORMATS = [
+            '.mp3', '.aac', '.m4a', '.wav', '.ogg', '.oga',
+            '.flac', '.opus', '.webm', '.mp4', '.weba'
+        ];
+
+        function isSupportedAudio(fileName) {
+            const ext = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+            return SUPPORTED_AUDIO_FORMATS.includes(ext);
+        }
+
         async function browseFolder(fullUrl) {
             elements.loadingStatus.classList.remove('hidden');
             try {
@@ -569,7 +580,11 @@
                     const resourcetype = prop.getElementsByTagNameNS('*', 'resourcetype')[0];
                     const isCollection = resourcetype && resourcetype.getElementsByTagNameNS('*', 'collection').length > 0;
                     const fileName = decodeURIComponent(absoluteHref.split('/').filter(p => p).pop() || '/');
-                    items.push({ name: fileName, href: absoluteHref, isFolder: isCollection, selected: false });
+
+                    // 只显示文件夹和支持的音频格式
+                    if (isCollection || isSupportedAudio(fileName)) {
+                        items.push({ name: fileName, href: absoluteHref, isFolder: isCollection, selected: false });
+                    }
                 });
                 state.explorerItems = items;
                 state.selectedItems = [];
@@ -655,8 +670,9 @@
             state.playlist.forEach((track, index) => {
                 const item = document.createElement('div');
                 item.className = `group p-4 rounded-3xl cursor-pointer transition flex items-center gap-4 hover:bg-stone-50 ${index === state.currentIndex ? 'track-active' : ''}`;
+                item.dataset.index = index; // 添加索引用于懒加载
                 item.innerHTML = `
-                    <div class="w-10 h-10 rounded-xl overflow-hidden bg-stone-100 flex-shrink-0 relative">
+                    <div class="cover-container w-10 h-10 rounded-xl overflow-hidden bg-stone-100 flex-shrink-0 relative">
                         ${track.cover ? `<img src="${track.cover}" class="w-full h-full object-cover">` : `<div class="w-full h-full flex items-center justify-center text-stone-300"><i data-lucide="music" class="w-4 h-4"></i></div>`}
                         ${track.source === 'webdav' ? `<div class="absolute bottom-0 right-0 bg-amber-600 p-0.5 rounded-tl-md"><i data-lucide="server" class="w-2 h-2 text-white"></i></div>` : ''}
                     </div>
@@ -669,6 +685,136 @@
                 elements.playlist.appendChild(item);
             });
             lucide.createIcons();
+
+            // 设置封面懒加载（仅对WebDAV曲目）
+            setupCoverLazyLoad();
+        }
+
+        // 封面懒加载相关变量
+        let coverLoadTimer = null;
+        let coverObserver = null;
+
+        function setupCoverLazyLoad() {
+            // 清除之前的定时器和观察器
+            if (coverLoadTimer) clearTimeout(coverLoadTimer);
+            if (coverObserver) coverObserver.disconnect();
+
+            // 获取所有需要加载封面的WebDAV曲目元素
+            const playlistItems = elements.playlist.querySelectorAll('[data-index]');
+            if (playlistItems.length === 0) return;
+
+            // 记录可视区域内的元素索引
+            const visibleIndices = new Set();
+
+            // 创建IntersectionObserver检测可视区域
+            coverObserver = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    const index = parseInt(entry.target.dataset.index);
+                    if (entry.isIntersecting) {
+                        visibleIndices.add(index);
+                    } else {
+                        visibleIndices.delete(index);
+                    }
+                });
+
+                // 重置定时器（用户滚动时重新计时）
+                if (coverLoadTimer) clearTimeout(coverLoadTimer);
+                coverLoadTimer = setTimeout(() => {
+                    loadVisibleCovers(visibleIndices);
+                }, 5000); // 5秒后加载
+            }, {
+                root: elements.playlist,
+                threshold: 0.1
+            });
+
+            // 观察所有曲目元素
+            playlistItems.forEach(item => {
+                coverObserver.observe(item);
+            });
+
+            // 监听滚动事件重置计时器
+            elements.playlist.onscroll = () => {
+                if (coverLoadTimer) clearTimeout(coverLoadTimer);
+                coverLoadTimer = setTimeout(() => {
+                    loadVisibleCovers(visibleIndices);
+                }, 5000);
+            };
+        }
+
+        // 加载可视区域内的封面
+        // 并发控制参数
+        const CONCURRENT_COVER_LOADS = 3; // 最多同时加载3个封面
+
+        async function loadVisibleCovers(visibleIndices) {
+            const indicesToLoad = Array.from(visibleIndices).filter(index => {
+                const track = state.playlist[index];
+                return track && track.source === 'webdav' && !track.cover && !track.coverLoading;
+            });
+
+            if (indicesToLoad.length === 0) return;
+            console.log(`开始加载 ${indicesToLoad.length} 个可视封面（并发数: ${CONCURRENT_COVER_LOADS}）...`);
+
+            // 单个封面加载函数
+            async function loadSingleCover(index) {
+                const track = state.playlist[index];
+                if (!track || track.cover || track.coverLoading) return;
+
+                track.coverLoading = true;
+
+                try {
+                    // 使用Range请求只下载文件开头部分（元数据通常在前1.5MB内）
+                    const METADATA_SIZE = 1.5 * 1024 * 1024; // 1.5MB
+                    const res = await fetch(track.fetchUrl, {
+                        headers: {
+                            'Authorization': track.auth,
+                            'Range': `bytes=0-${METADATA_SIZE - 1}`
+                        }
+                    });
+
+                    const blob = await res.blob();
+                    console.log(`[${index}] 下载了 ${(blob.size / 1024).toFixed(1)}KB`);
+
+                    const meta = await getMetadata(blob);
+
+                    if (meta.cover) {
+                        track.cover = meta.cover;
+                        track.title = meta.title || track.title;
+                        track.artist = meta.artist || track.artist;
+
+                        // 更新对应的列表项封面
+                        const itemElement = elements.playlist.querySelector(`[data-index="${index}"]`);
+                        if (itemElement) {
+                            const coverContainer = itemElement.querySelector('.cover-container');
+                            if (coverContainer) {
+                                coverContainer.innerHTML = `<img src="${meta.cover}" class="w-full h-full object-cover">`;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error(`加载封面失败 [${index}]:`, e);
+                }
+
+                track.coverLoading = false;
+            }
+
+            // 并发控制：使用Promise池
+            const pool = [];
+            for (const index of indicesToLoad) {
+                const promise = loadSingleCover(index).then(() => {
+                    // 任务完成后从池中移除
+                    pool.splice(pool.indexOf(promise), 1);
+                });
+                pool.push(promise);
+
+                // 如果达到并发上限，等待任意一个完成
+                if (pool.length >= CONCURRENT_COVER_LOADS) {
+                    await Promise.race(pool);
+                }
+            }
+
+            // 等待剩余任务完成
+            await Promise.all(pool);
+            console.log('封面加载完成');
         }
 
         // 从图片提取主色调
