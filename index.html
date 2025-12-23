@@ -73,6 +73,27 @@
             animation: spin 1s linear infinite;
         }
 
+        /* 封面加载专用转圈 - 绿色主题 */
+        .cover-spinner {
+            border: 2px solid #d1fae5;
+            border-top: 2px solid #10b981;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .cover-spinner-text {
+            position: absolute;
+            font-size: 9px;
+            font-weight: 800;
+            color: #10b981;
+        }
+
         @keyframes spin {
             0% {
                 transform: rotate(0deg);
@@ -213,8 +234,17 @@
                 </div>
 
                 <div class="mt-6 pt-6 border-t border-stone-50 flex justify-between items-center">
-                    <span id="trackCount" class="text-[10px] font-black text-stone-300 uppercase tracking-[0.2em]">0
-                        Items</span>
+                    <div class="flex items-center gap-3">
+                        <span id="trackCount" class="text-[10px] font-black text-stone-300 uppercase tracking-[0.2em]">0
+                            Items</span>
+                        <!-- 封面加载状态提示 - 转圈样式 -->
+                        <div id="coverLoadStatus" class="hidden items-center gap-2">
+                            <div class="cover-spinner">
+                                <span id="coverSpinnerText" class="cover-spinner-text"></span>
+                            </div>
+                            <span id="coverLoadText" class="text-[10px] font-bold text-emerald-600"></span>
+                        </div>
+                    </div>
                     <button id="clearBtn"
                         class="text-[10px] font-black text-red-200 hover:text-red-400 transition uppercase">Clear
                         All</button>
@@ -693,11 +723,72 @@
         // 封面懒加载相关变量
         let coverLoadTimer = null;
         let coverObserver = null;
+        let countdownTimer = null;
+        let countdownValue = 5;
+
+        // UI状态更新函数
+        function updateCoverLoadStatus(text, spinnerText = '', show = true) {
+            const statusEl = document.getElementById('coverLoadStatus');
+            const textEl = document.getElementById('coverLoadText');
+            const spinnerTextEl = document.getElementById('coverSpinnerText');
+
+            if (statusEl && textEl) {
+                if (show) {
+                    statusEl.classList.remove('hidden');
+                    statusEl.classList.add('flex');
+                    textEl.textContent = text;
+                    if (spinnerTextEl) spinnerTextEl.textContent = spinnerText;
+                } else {
+                    statusEl.classList.add('hidden');
+                    statusEl.classList.remove('flex');
+                }
+            }
+        }
+
+        // 开始倒计时显示
+        function startCountdown(visibleIndices) {
+            // 检查是否有需要加载的封面
+            const needLoad = Array.from(visibleIndices).some(index => {
+                const track = state.playlist[index];
+                return track && track.source === 'webdav' && !track.cover && !track.coverLoading && !track.url;
+            });
+
+            if (!needLoad) {
+                updateCoverLoadStatus('', '', false);
+                return;
+            }
+
+            countdownValue = 5;
+            updateCoverLoadStatus('加载封面', countdownValue);
+
+            // 清除之前的倒计时
+            if (countdownTimer) clearInterval(countdownTimer);
+
+            countdownTimer = setInterval(() => {
+                countdownValue--;
+                if (countdownValue > 0) {
+                    updateCoverLoadStatus('加载封面', countdownValue);
+                } else {
+                    clearInterval(countdownTimer);
+                    countdownTimer = null;
+                }
+            }, 1000);
+        }
+
+        // 停止倒计时
+        function stopCountdown() {
+            if (countdownTimer) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+            updateCoverLoadStatus('', '', false);
+        }
 
         function setupCoverLazyLoad() {
             // 清除之前的定时器和观察器
             if (coverLoadTimer) clearTimeout(coverLoadTimer);
             if (coverObserver) coverObserver.disconnect();
+            stopCountdown();
 
             // 获取所有需要加载封面的WebDAV曲目元素
             const playlistItems = elements.playlist.querySelectorAll('[data-index]');
@@ -719,6 +810,9 @@
 
                 // 重置定时器（用户滚动时重新计时）
                 if (coverLoadTimer) clearTimeout(coverLoadTimer);
+                stopCountdown();
+                startCountdown(visibleIndices);
+
                 coverLoadTimer = setTimeout(() => {
                     loadVisibleCovers(visibleIndices);
                 }, 5000); // 5秒后加载
@@ -735,6 +829,9 @@
             // 监听滚动事件重置计时器
             elements.playlist.onscroll = () => {
                 if (coverLoadTimer) clearTimeout(coverLoadTimer);
+                stopCountdown();
+                startCountdown(visibleIndices);
+
                 coverLoadTimer = setTimeout(() => {
                     loadVisibleCovers(visibleIndices);
                 }, 5000);
@@ -746,13 +843,28 @@
         const CONCURRENT_COVER_LOADS = 3; // 最多同时加载3个封面
 
         async function loadVisibleCovers(visibleIndices) {
+            stopCountdown(); // 停止倒计时
+
             const indicesToLoad = Array.from(visibleIndices).filter(index => {
                 const track = state.playlist[index];
                 return track && track.source === 'webdav' && !track.cover && !track.coverLoading;
             });
 
-            if (indicesToLoad.length === 0) return;
+            if (indicesToLoad.length === 0) {
+                updateCoverLoadStatus('', '', false);
+                return;
+            }
+
             console.log(`开始加载 ${indicesToLoad.length} 个可视封面（并发数: ${CONCURRENT_COVER_LOADS}）...`);
+
+            let loadedCount = 0;
+            const totalCount = indicesToLoad.length;
+
+            // 更新进度显示
+            function updateProgress() {
+                loadedCount++;
+                updateCoverLoadStatus(`${loadedCount}/${totalCount}`, '');
+            }
 
             // 单个封面加载函数
             async function loadSingleCover(index) {
@@ -762,17 +874,26 @@
                 track.coverLoading = true;
 
                 try {
-                    // 使用Range请求只下载文件开头部分（元数据通常在前1.5MB内）
-                    const METADATA_SIZE = 1.5 * 1024 * 1024; // 1.5MB
-                    const res = await fetch(track.fetchUrl, {
-                        headers: {
-                            'Authorization': track.auth,
-                            'Range': `bytes=0-${METADATA_SIZE - 1}`
-                        }
-                    });
+                    let blob;
 
-                    const blob = await res.blob();
-                    console.log(`[${index}] 下载了 ${(blob.size / 1024).toFixed(1)}KB`);
+                    // 检查是否已有完整缓存（播放过的歌曲）
+                    if (track.url && track.url.startsWith('blob:')) {
+                        // 从已缓存的URL获取Blob
+                        console.log(`[${index}] 使用已缓存的数据提取封面`);
+                        const cachedRes = await fetch(track.url);
+                        blob = await cachedRes.blob();
+                    } else {
+                        // 使用Range请求只下载文件开头部分
+                        const METADATA_SIZE = 1.5 * 1024 * 1024; // 1.5MB
+                        const res = await fetch(track.fetchUrl, {
+                            headers: {
+                                'Authorization': track.auth,
+                                'Range': `bytes=0-${METADATA_SIZE - 1}`
+                            }
+                        });
+                        blob = await res.blob();
+                        console.log(`[${index}] 下载了 ${(blob.size / 1024).toFixed(1)}KB`);
+                    }
 
                     const meta = await getMetadata(blob);
 
@@ -795,7 +916,11 @@
                 }
 
                 track.coverLoading = false;
+                updateProgress();
             }
+
+            // 显示开始加载
+            updateCoverLoadStatus(`0/${totalCount}`, '');
 
             // 并发控制：使用Promise池
             const pool = [];
@@ -815,6 +940,12 @@
             // 等待剩余任务完成
             await Promise.all(pool);
             console.log('封面加载完成');
+
+            // 短暂显示完成状态后隐藏
+            updateCoverLoadStatus('完成', '✓');
+            setTimeout(() => {
+                updateCoverLoadStatus('', '', false);
+            }, 2000);
         }
 
         // 从图片提取主色调
